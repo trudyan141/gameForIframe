@@ -2,10 +2,11 @@ import { SessionKeyData } from './erc4337.service'
 
 export interface PlayParams {
   accountAddress: string
-  betAmount: number
-  diceResult?: number
-  signature: string
-  timestamp: number
+  isWin: boolean
+  winAmount: number  // Positive if win, negative if lose
+  diceValues: [number, number, number]
+  total: number
+  choice: 'big' | 'small'
 }
 
 export class BackendService {
@@ -27,7 +28,6 @@ export class BackendService {
   async registerSessionKey(sessionData: SessionKeyData): Promise<{ success: boolean; message: string }> {
     console.log('[Backend] Registering session key:', sessionData.sessionPublicKey)
     
-    // Simulate API delay
     await new Promise(resolve => setTimeout(resolve, 800))
     
     this.registeredSessions.set(sessionData.sessionPublicKey.toLowerCase(), sessionData)
@@ -39,27 +39,31 @@ export class BackendService {
   }
 
   /**
-   * Submit a dice roll game play
+   * Submit game result to backend for contract signing
+   * FE already determined win/lose, BE just needs to execute the contract call
    */
-  async submitPlay(params: PlayParams): Promise<{ success: boolean; result?: number; message: string; txHash?: string }> {
-    console.log('[Backend] Submitting play for account:', params.accountAddress)
+  async submitPlay(params: PlayParams): Promise<{ success: boolean; message: string; txHash?: string }> {
+    console.log('[Backend] Processing game result:', {
+      account: params.accountAddress,
+      isWin: params.isWin,
+      amount: params.winAmount,
+      dice: params.diceValues,
+      total: params.total
+    })
     
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1500))
+    // Simulate contract signing delay
+    await new Promise(resolve => setTimeout(resolve, 500))
     
-    // Simulate API delay
-    // Simulate game logic
-    const diceResult = Math.floor(Math.random() * 6) + 1
-    const isWin = diceResult >= 4
+    // In production: BE would use session key to sign UserOp
+    // and call smart contract to transfer tokens based on result
+    const txHash = '0x' + Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)
     
-    // In a real system, the BE would sign a UserOp or trigger a contract call
-    // using the session key information it has stored.
+    console.log('[Backend] Contract signed. TxHash:', txHash)
     
     return {
       success: true,
-      result: diceResult,
-      message: isWin ? 'You won!' : 'You lost.',
-      txHash: '0x' + Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)
+      message: params.isWin ? 'Win processed!' : 'Loss processed.',
+      txHash
     }
   }
 }

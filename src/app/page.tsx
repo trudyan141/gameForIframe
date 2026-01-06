@@ -91,6 +91,7 @@ export default function Home() {
             const regResult = await backendService.registerSessionKey(session)
             if (regResult.success) {
               addLog('Session registered!', 'success')
+              setRolling(false)  // Reset rolling before entering game
               setGameState('ROLL_DICE')
             }
           }
@@ -98,6 +99,7 @@ export default function Home() {
           addLog(`Confirmation error: ${err.message}`, 'error')
         } finally {
           setIsWaitingForParent(false)
+          setRolling(false)  // Always reset rolling
         }
       }
     }
@@ -169,16 +171,18 @@ export default function Home() {
       const dice2 = Math.floor(Math.random() * 6) + 1
       const dice3 = Math.floor(Math.random() * 6) + 1
       const total = dice1 + dice2 + dice3
+      const diceValues: [number, number, number] = [dice1, dice2, dice3]
       
-      setDiceValues([dice1, dice2, dice3])
+      setDiceValues(diceValues)
 
       // Determine win: Big = 11-17, Small = 4-10
       const isBig = total >= 11
       const isWin = (choice === 'big' && isBig) || (choice === 'small' && !isBig)
+      const winAmount = isWin ? amount : -amount
 
-      // Update balance
+      // Update local balance
       const currentBalance = parseFloat(tokenBalance)
-      const newBalance = isWin ? currentBalance + amount : currentBalance - amount
+      const newBalance = currentBalance + winAmount
       setTokenBalance(newBalance.toFixed(0))
 
       setGameResult({
@@ -189,20 +193,39 @@ export default function Home() {
       })
 
       if (isWin) {
-        addLog(`WIN! Total: ${total} (${isBig ? 'BIG' : 'SMALL'}). +${amount} ${tokenSymbol}`, 'success')
+        addLog(`🎉 WIN! Dice: [${diceValues.join(', ')}] = ${total} (${isBig ? 'BIG' : 'SMALL'})`, 'success')
+        addLog(`+${amount} ${tokenSymbol} added to balance`, 'success')
       } else {
-        addLog(`LOSE! Total: ${total} (${isBig ? 'BIG' : 'SMALL'}). -${amount} ${tokenSymbol}`, 'error')
+        addLog(`😢 LOSE! Dice: [${diceValues.join(', ')}] = ${total} (${isBig ? 'BIG' : 'SMALL'})`, 'error')
+        addLog(`-${amount} ${tokenSymbol} deducted from balance`, 'error')
       }
 
-      // Notify parent
+      // Submit result to backend for contract signing
+      addLog(`Submitting to BE: ${walletAddress.substring(0, 8)}... | ${isWin ? 'WIN' : 'LOSE'} ${winAmount}`, 'info')
+      const beResult = await backendService.submitPlay({
+        accountAddress: walletAddress,
+        isWin,
+        winAmount,
+        diceValues,
+        total,
+        choice
+      })
+
+      if (beResult.success) {
+        addLog(`✅ Contract signed! Tx: ${beResult.txHash?.substring(0, 16)}...`, 'success')
+      }
+
+      // Notify parent with result
       if (window.parent !== window) {
         window.parent.postMessage({ 
           type: 'GAME_PLAY_RESULT', 
           value: JSON.stringify({ 
             isWin, 
-            diceValues: [dice1, dice2, dice3],
+            diceValues,
             total,
-            choice
+            choice,
+            winAmount,
+            txHash: beResult.txHash
           }) 
         }, '*')
       }
@@ -221,8 +244,8 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        {/* Main Game Card */}
+      <div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left: Game Card */}
         <div className="glass rounded-3xl p-6 border-glow">
           {gameState === 'PLAY' && (
             <PlayScreen 
@@ -251,8 +274,10 @@ export default function Home() {
           )}
         </div>
 
-        {/* Activity Log */}
-        <TransactionLog logs={logs} />
+        {/* Right: Activity Feed */}
+        <div className="glass rounded-3xl p-6 border-glow">
+          <TransactionLog logs={logs} />
+        </div>
       </div>
     </main>
   )

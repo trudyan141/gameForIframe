@@ -87,7 +87,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({
               <TrendingDown size={20} />
               <span>Small</span>
             </div>
-            <p className="text-[10px] font-medium opacity-70 mt-1">4 - 10</p>
+            <p className="text-[10px] font-medium opacity-70 mt-1">3 - 10</p>
           </button>
           
           <button
@@ -103,7 +103,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({
               <TrendingUp size={20} />
               <span>Big</span>
             </div>
-            <p className="text-[10px] font-medium opacity-70 mt-1">11 - 17</p>
+            <p className="text-[10px] font-medium opacity-70 mt-1">11 - 18</p>
           </button>
         </div>
       </div>
