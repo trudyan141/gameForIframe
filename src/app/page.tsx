@@ -4,16 +4,14 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { TransactionLog, Log } from '@/components/TransactionLog'
 import { PlayScreen } from '@/components/PlayScreen'
 import { GameScreen } from '@/components/GameScreen'
-import { getERC4337Service, getSessionKeyManager } from '@/services/erc4337.service'
 import { backendService } from '@/services/backend.service'
 import { ethers } from 'ethers'
-import { 
-  ENTRY_POINT_ADDRESS, 
-  FACTORY_ADDRESS, 
-  TOKEN_ADDRESS, 
-  PAYMASTER_ADDRESS 
-} from '@/constants'
 import { rpcUrl } from '@/config'
+
+// ========== DEMO MODE ==========
+// Set to true to bypass parent iframe confirmation for testing
+const DEMO_MODE = false
+// ================================
 
 export default function Home() {
   // Game State
@@ -22,8 +20,9 @@ export default function Home() {
   const [isWaitingForParent, setIsWaitingForParent] = useState(false)
   const [tempOwnerPk, setTempOwnerPk] = useState('')
   const [walletStatus, setWalletStatus] = useState<'connected' | 'disconnected' | 'error' | 'loading'>('disconnected')
-  const [tokenBalance, setTokenBalance] = useState('1000')
-  const tokenSymbol = 'CHIP'
+  const [tokenBalance, setTokenBalance] = useState('0')
+  const [tokenAddress, setTokenAddress] = useState('')
+  const tokenSymbol = 'USDT'
   const [logs, setLogs] = useState<Log[]>([])
   
   // Game Play State
@@ -42,71 +41,51 @@ export default function Home() {
     console.log(`[Game] ${message}`)
   }, [])
 
-  // ============================================
-  // WALLET INITIALIZATION
-  // ============================================
-
-  const initializeWallet = useCallback(async (pk: string, address: string) => {
-    setWalletStatus('loading')
-    addLog('Initializing wallet...')
-    
-    try {
-      getERC4337Service({
-        operatorPrivateKey: pk,
-        rpcUrl: rpcUrl,
-        entryPointAddress: ENTRY_POINT_ADDRESS,
-        factoryAddress: FACTORY_ADDRESS,
-        tokenAddress: TOKEN_ADDRESS,
-        paymasterAddress: PAYMASTER_ADDRESS
-      })
-      
-      setWalletAddress(address)
-      setWalletStatus('connected')
-      addLog(`Wallet connected: ${address.substring(0, 8)}...`, 'success')
-    } catch (error: any) {
-      setWalletStatus('error')
-      addLog(`Init error: ${error.message}`, 'error')
-      throw error
-    }
-  }, [addLog])
-
   // Listen for parent messages
   useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
       const data = event.data
       if (!data) return
 
-      if (data.type === 'SESSION_CONFIRMED') {
+      if (data.type === 'WALLET_CONFIRMED') {
         const value = typeof data.value === 'string' ? JSON.parse(data.value) : data.value
-        const address = value.address || value.accountAddress
+        const { abstractAccountAddress, tokenAddress: tokenAddr, tx } = value
         
-        addLog(`Parent confirmed wallet: ${address}`, 'success')
+        addLog(`Parent confirmed! Tx: ${tx?.substring(0, 10)}...`, 'success')
+        addLog(`Abstract Account: ${abstractAccountAddress.substring(0, 8)}...`, 'info')
         
         try {
-          await initializeWallet(tempOwnerPk, address)
+          // Store addresses
+          setWalletAddress(abstractAccountAddress)
+          setTokenAddress(tokenAddr)
           
-          const sessionManager = getSessionKeyManager()
-          const session = sessionManager.getSession()
-          if (session) {
-            const regResult = await backendService.registerSessionKey(session)
-            if (regResult.success) {
-              addLog('Session registered!', 'success')
-              setRolling(false)  // Reset rolling before entering game
-              setGameState('ROLL_DICE')
-            }
-          }
+          // Fetch real USDT balance from tokenAddress
+          const provider = new ethers.JsonRpcProvider(rpcUrl)
+          const tokenContract = new ethers.Contract(
+            tokenAddr,
+            ['function balanceOf(address) view returns (uint256)'],
+            provider
+          )
+          
+          const balance = await tokenContract.balanceOf(abstractAccountAddress)
+          const formattedBalance = ethers.formatUnits(balance, 6) // USDT is 6 decimals
+          setTokenBalance(formattedBalance)
+          
+          addLog(`USDT Balance: ${formattedBalance}`, 'success')
+          setRolling(false)
+          setGameState('ROLL_DICE')
         } catch (err: any) {
-          addLog(`Confirmation error: ${err.message}`, 'error')
+          addLog(`Error: ${err.message}`, 'error')
         } finally {
           setIsWaitingForParent(false)
-          setRolling(false)  // Always reset rolling
+          setRolling(false)
         }
       }
     }
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [initializeWallet, tempOwnerPk, addLog])
+  }, [tempOwnerPk, addLog])
 
   // Landing logic
   useEffect(() => {
@@ -118,30 +97,38 @@ export default function Home() {
   // ============================================
 
   const handlePlayGame = async () => {
+    // DEMO MODE: Skip parent confirmation and go directly to game
+    if (DEMO_MODE) {
+      addLog('🎮 DEMO MODE: Skipping parent confirmation', 'info')
+      // Create wallet even in demo mode for signing
+      const demoWallet = ethers.Wallet.createRandom()
+      setTempOwnerPk(demoWallet.privateKey)
+      setWalletAddress(demoWallet.address)
+      setGameState('ROLL_DICE')
+      return
+    }
+
     setRolling(true)
-    addLog('Creating game session...')
+    addLog('Creating wallet...')
 
     try {
+      // Create random wallet
       const randomWallet = ethers.Wallet.createRandom()
-      const ownerPk = randomWallet.privateKey
-      setTempOwnerPk(ownerPk)
-
-      const service = getERC4337Service()
-      const accountAddress = await service.getAccountAddress(randomWallet.address, 0)
+      const walletPrivateKey = randomWallet.privateKey
+      const walletAddress = randomWallet.address
       
-      const sessionManager = getSessionKeyManager()
-      const session = await sessionManager.createSessionKey(ownerPk, accountAddress)
+      // Store private key for signing later
+      setTempOwnerPk(walletPrivateKey)
       
-      addLog('Session created. Awaiting authorization...', 'info')
+      addLog(`Wallet created: ${walletAddress.substring(0, 8)}...`, 'success')
+      addLog('Waiting for parent authorization...', 'info')
 
+      // Send wallet address to parent
       if (window.parent !== window) {
         window.parent.postMessage({ 
-          type: 'CREATE_SESSION', 
+          type: 'WALLET_CREATED', 
           value: JSON.stringify({ 
-            ownerPublicKey: randomWallet.address,
-            sessionPublicKey: session.sessionPublicKey,
-            accountAddress: accountAddress,
-            validUntil: session.validUntil
+            walletAddress: walletAddress
           }) 
         }, '*')
       }
