@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demo Game - Dice Roll</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: white;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 500px;
+        width: 100%;
+      }
+
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+        color: #43e4e8;
+      }
+
+      .status-box {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+      }
+
+      .status-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-size: 14px;
+      }
+
+      .status-label {
+        color: #888;
+      }
+
+      .status-value {
+        color: #43e4e8;
+        word-break: break-all;
+        max-width: 200px;
+        text-align: right;
+      }
+
+      .status-value.connected {
+        color: #4caf50;
+      }
+
+      .status-value.disconnected {
+        color: #f44336;
+      }
+
+      .game-area {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 15px;
+        padding: 30px;
+        text-align: center;
+      }
+
+      .dice {
+        font-size: 80px;
+        margin: 20px 0;
+        animation: none;
+      }
+
+      .dice.rolling {
+        animation: roll 0.3s infinite;
+      }
+
+      @keyframes roll {
+        0% {
+          transform: rotate(0deg);
+        }
+        25% {
+          transform: rotate(10deg);
+        }
+        50% {
+          transform: rotate(0deg);
+        }
+        75% {
+          transform: rotate(-10deg);
+        }
+        100% {
+          transform: rotate(0deg);
+        }
+      }
+
+      .bet-input {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        justify-content: center;
+      }
+
+      input[type="number"] {
+        width: 150px;
+        padding: 12px 15px;
+        border: 2px solid #43e4e8;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.3);
+        color: white;
+        font-size: 18px;
+        text-align: center;
+      }
+
+      input[type="number"]:focus {
+        outline: none;
+        border-color: #23d1d6;
+      }
+
+      .btn {
+        padding: 15px 40px;
+        font-size: 18px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s;
+      }
+
+      .btn-roll {
+        background: linear-gradient(135deg, #43e4e8 0%, #23d1d6 100%);
+        color: #1a1a2e;
+        font-weight: bold;
+      }
+
+      .btn-roll:hover {
+        transform: scale(1.05);
+        box-shadow: 0 5px 20px rgba(67, 228, 232, 0.4);
+      }
+
+      .btn-roll:disabled {
+        background: #555;
+        color: #888;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      .result {
+        margin-top: 20px;
+        padding: 15px;
+        border-radius: 8px;
+        font-size: 18px;
+      }
+
+      .result.win {
+        background: rgba(76, 175, 80, 0.3);
+        border: 1px solid #4caf50;
+      }
+
+      .result.lose {
+        background: rgba(244, 67, 54, 0.3);
+        border: 1px solid #f44336;
+      }
+
+      .log-area {
+        margin-top: 20px;
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 10px;
+        padding: 15px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .log-title {
+        color: #888;
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .log-item {
+        font-size: 11px;
+        color: #aaa;
+        margin-bottom: 5px;
+        font-family: monospace;
+      }
+
+      .log-item.error {
+        color: #f44336;
+      }
+
+      .log-item.success {
+        color: #4caf50;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎲 Demo Dice Game</h1>
+
+      <!-- Status Box -->
+      <div class="status-box">
+        <div class="status-item">
+          <span class="status-label">Wallet Status:</span>
+          <span id="walletStatus" class="status-value disconnected"
+            >Waiting for privateKey...</span
+          >
+        </div>
+        <div class="status-item">
+          <span class="status-label">Wallet Address:</span>
+          <span id="walletAddress" class="status-value">-</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Network:</span>
+          <span class="status-value">MegaETH Testnet</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Balance:</span>
+          <span id="balance" class="status-value">Loading...</span>
+        </div>
+      </div>
+
+      <!-- Game Area -->
+      <div class="game-area">
+        <p>Roll the dice! Win if you get 4, 5, or 6</p>
+
+        <div id="dice" class="dice">🎲</div>
+
+        <div class="bet-input">
+          <input
+            type="number"
+            id="betAmount"
+            value="0.001"
+            min="0.0001"
+            max="1"
+            step="0.0001"
+            placeholder="Bet Amount"
+          />
+          <span style="line-height: 45px">ETH</span>
+        </div>
+
+        <button id="rollBtn" class="btn btn-roll" disabled>
+          🎰 Roll Dice (Sign Transaction)
+        </button>
+
+        <div id="result" class="result" style="display: none"></div>
+      </div>
+
+      <!-- Log Area -->
+      <div class="log-area">
+        <div class="log-title">📋 Transaction Log</div>
+        <div id="logs"></div>
+      </div>
+    </div>
+
+    <script>
+      // ================== CONFIG ==================
+      // MegaETH Testnet (from MEGAETH_INTEGRATION.md)
+      const RPC_URL = "https://carrot.megaeth.com/rpc";
+      const CHAIN_ID = 6342; // 0x18c6
+      const CHAIN_NAME = "MegaETH Testnet";
+
+      // ================== GAME STATE ==================
+      let wallet = null;
+      let privateKey = null;
+      let provider = null;
+      let balance = 0; // Native ETH balance
+
+      // ================== DOM ELEMENTS ==================
+      const walletStatus = document.getElementById("walletStatus");
+      const walletAddress = document.getElementById("walletAddress");
+      const balanceEl = document.getElementById("balance");
+      const diceEl = document.getElementById("dice");
+      const betAmountEl = document.getElementById("betAmount");
+      const rollBtn = document.getElementById("rollBtn");
+      const resultEl = document.getElementById("result");
+      const logsEl = document.getElementById("logs");
+
+      // ================== LOGGING ==================
+      function log(message, type = "info") {
+        const time = new Date().toLocaleTimeString();
+        const div = document.createElement("div");
+        div.className = `log-item ${type}`;
+        div.textContent = `[${time}] ${message}`;
+        logsEl.insertBefore(div, logsEl.firstChild);
+        console.log(`[Game] ${message}`);
+      }
+
+      // ================== RECEIVE PRIVATE KEY FROM PARENT ==================
+
+      // Method 1: Listen for postMessage
+      window.addEventListener("message", function (event) {
+        log(
+          `Received message from parent: ${JSON.stringify(event.data).substring(
+            0,
+            50
+          )}...`
+        );
+
+        if (event.data && event.data.privateKey) {
+          initWallet(event.data.privateKey);
+        }
+      });
+
+      // Method 2: Check if privateKey set directly on window
+      function checkWindowPrivateKey() {
+        if (window.privateKey && !wallet) {
+          log("Found privateKey on window object");
+          initWallet(window.privateKey);
+        }
+      }
+
+      // Check periodically (fallback)
+      setInterval(checkWindowPrivateKey, 500);
+
+      // ================== WALLET INITIALIZATION ==================
+      async function initWallet(pk) {
+        try {
+          privateKey = pk;
+
+          // Create provider for MegaETH
+          provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+          log(`Connected to ${CHAIN_NAME} (${RPC_URL})`);
+
+          // Create wallet from private key using ethers.js
+          wallet = new ethers.Wallet(pk, provider);
+
+          // Update UI
+          walletStatus.textContent = "Connected ✓";
+          walletStatus.className = "status-value connected";
+
+          const addr = wallet.address;
+          walletAddress.textContent = `${addr.substring(
+            0,
+            6
+          )}...${addr.substring(38)}`;
+
+          log(`Wallet initialized: ${addr}`, "success");
+
+          // Fetch native ETH balance from blockchain
+          await fetchBalance();
+
+          rollBtn.disabled = false;
+
+          // Notify parent that we're ready
+          notifyParent("GAME_READY", { address: wallet.address });
+        } catch (error) {
+          log(`Error initializing wallet: ${error.message}`, "error");
+          walletStatus.textContent = "Error: Invalid key";
+          walletStatus.className = "status-value disconnected";
+        }
+      }
+
+      // ================== FETCH NATIVE ETH BALANCE ==================
+      async function fetchBalance() {
+        if (!wallet || !provider) return;
+
+        try {
+          log("Fetching ETH balance from MegaETH...");
+
+          // Get native ETH balance
+          const rawBalance = await provider.getBalance(wallet.address);
+
+          // Convert from wei to ETH
+          balance = parseFloat(ethers.utils.formatEther(rawBalance));
+
+          balanceEl.textContent = `${balance.toFixed(6)} ETH`;
+          log(`Balance fetched: ${balance} ETH`, "success");
+        } catch (error) {
+          log(`Error fetching balance: ${error.message}`, "error");
+          balanceEl.textContent = "Error loading";
+        }
+      }
+
+      // ================== GAME LOGIC ==================
+      async function rollDice() {
+        if (!wallet) {
+          log("No wallet connected!", "error");
+          return;
+        }
+
+        const betAmount = parseFloat(betAmountEl.value);
+
+        if (betAmount > balance) {
+          log("Insufficient balance!", "error");
+          return;
+        }
+
+        // Disable button and start animation
+        rollBtn.disabled = true;
+        diceEl.classList.add("rolling");
+        resultEl.style.display = "none";
+
+        log(`Placing bet: ${betAmount} ETH`);
+
+        try {
+          // ============ SIGN TRANSACTION ============
+          // This is the key part - signing a message/transaction with the privateKey
+
+          const gameData = {
+            action: "ROLL_DICE",
+            betAmount: betAmount,
+            timestamp: Date.now(),
+            nonce: Math.random().toString(36).substring(7),
+          };
+
+          const message = JSON.stringify(gameData);
+          log(`Signing message: ${message.substring(0, 50)}...`);
+
+          // Sign the message using the wallet
+          const signature = await wallet.signMessage(message);
+          log(`Signature created: ${signature.substring(0, 30)}...`, "success");
+
+          // Verify signature (demo)
+          const recoveredAddress = ethers.utils.verifyMessage(
+            message,
+            signature
+          );
+          log(
+            `Signature verified. Recovered: ${recoveredAddress.substring(
+              0,
+              10
+            )}...`
+          );
+
+          // ============ GAME RESULT ============
+          // Simulate dice roll (in real game, this would come from blockchain/server)
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+
+          const diceResult = Math.floor(Math.random() * 6) + 1;
+          const diceEmojis = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+
+          diceEl.classList.remove("rolling");
+          diceEl.textContent = diceEmojis[diceResult - 1];
+
+          const isWin = diceResult >= 4;
+
+          // Update local balance (in real game, this would refetch from blockchain)
+          if (isWin) {
+            balance += betAmount;
+            log(`WIN! Dice: ${diceResult}, Won: ${betAmount} ETH`, "success");
+          } else {
+            balance -= betAmount;
+            log(`LOSE! Dice: ${diceResult}, Lost: ${betAmount} ETH`, "error");
+          }
+
+          balanceEl.textContent = `${balance.toFixed(6)} ETH`;
+
+          // Show result
+          resultEl.style.display = "block";
+          resultEl.className = `result ${isWin ? "win" : "lose"}`;
+          resultEl.innerHTML = isWin
+            ? `🎉 You WIN! Rolled ${diceResult}. Won ${betAmount} ETH!`
+            : `😢 You LOSE! Rolled ${diceResult}. Lost ${betAmount} ETH.`;
+
+          // ============ NOTIFY PARENT ============
+          // This tells the parent (Sunrise Gaming) that a game action happened
+          notifyParent("GAME_PLAY", {
+            syncSusd: "True",
+            result: isWin ? "WIN" : "LOSE",
+            diceResult,
+            betAmount,
+            signature: signature.substring(0, 20) + "...",
+          });
+
+          // Refresh balance from blockchain after game
+          setTimeout(fetchBalance, 2000);
+        } catch (error) {
+          log(`Error during game: ${error.message}`, "error");
+          diceEl.classList.remove("rolling");
+        } finally {
+          rollBtn.disabled = false;
+        }
+      }
+
+      // ================== COMMUNICATION WITH PARENT ==================
+      function notifyParent(type, value) {
+        const message = {
+          type,
+          value: typeof value === "string" ? value : JSON.stringify(value),
+        };
+
+        // Post message to parent window
+        if (window.parent !== window) {
+          window.parent.postMessage(message, "*");
+          log(`Notify parent: ${type}`);
+        }
+      }
+
+      // ================== EVENT LISTENERS ==================
+      rollBtn.addEventListener("click", rollDice);
+
+      // ================== INIT ==================
+      log("Demo Game loaded. Waiting for privateKey from parent...");
+      log(`Network: ${CHAIN_NAME}`);
+      log(`RPC: ${RPC_URL}`);
+
+      // For standalone testing (without iframe)
+      // Uncomment below to test directly with a test private key:
+      // initWallet('YOUR_TEST_PRIVATE_KEY_HERE');
+    </script>
+  </body>
+</html>
