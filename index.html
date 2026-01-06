@@ -67,6 +67,11 @@
         color: #f44336;
       }
 
+      .token-balance {
+        color: #ffd700;
+        font-weight: bold;
+      }
+
       .game-area {
         background: rgba(255, 255, 255, 0.05);
         border-radius: 15px;
@@ -107,12 +112,13 @@
         gap: 10px;
         margin-bottom: 20px;
         justify-content: center;
+        align-items: center;
       }
 
       input[type="number"] {
         width: 150px;
         padding: 12px 15px;
-        border: 2px solid #43e4e8;
+        border: 2px solid #ffd700;
         border-radius: 8px;
         background: rgba(0, 0, 0, 0.3);
         color: white;
@@ -122,7 +128,13 @@
 
       input[type="number"]:focus {
         outline: none;
-        border-color: #23d1d6;
+        border-color: #ffea00;
+      }
+
+      .token-symbol {
+        color: #ffd700;
+        font-weight: bold;
+        line-height: 45px;
       }
 
       .btn {
@@ -135,14 +147,14 @@
       }
 
       .btn-roll {
-        background: linear-gradient(135deg, #43e4e8 0%, #23d1d6 100%);
+        background: linear-gradient(135deg, #ffd700 0%, #ffaa00 100%);
         color: #1a1a2e;
         font-weight: bold;
       }
 
       .btn-roll:hover {
         transform: scale(1.05);
-        box-shadow: 0 5px 20px rgba(67, 228, 232, 0.4);
+        box-shadow: 0 5px 20px rgba(255, 215, 0, 0.4);
       }
 
       .btn-roll:disabled {
@@ -199,11 +211,34 @@
       .log-item.success {
         color: #4caf50;
       }
+
+      .token-info {
+        background: rgba(255, 215, 0, 0.1);
+        border: 1px solid rgba(255, 215, 0, 0.3);
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 15px;
+        font-size: 12px;
+      }
+
+      .token-info a {
+        color: #ffd700;
+        text-decoration: none;
+      }
+
+      .token-info a:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>🎲 Demo Dice Game</h1>
+
+      <!-- Token Info -->
+      <div class="token-info">
+        🪙 Using Token: <a href="https://megaeth-testnet-v2.blockscout.com/token/0x10cED494da9C570cEd6005656D3fFCbc6F94f90e" target="_blank">View on Explorer</a>
+      </div>
 
       <!-- Status Box -->
       <div class="status-box">
@@ -222,14 +257,19 @@
           <span class="status-value">MegaETH Testnet</span>
         </div>
         <div class="status-item">
-          <span class="status-label">Balance:</span>
-          <span id="balance" class="status-value">Loading...</span>
+          <span class="status-label">ETH Balance:</span>
+          <span id="ethBalance" class="status-value">Loading...</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Token Balance:</span>
+          <span id="tokenBalance" class="status-value token-balance">Loading...</span>
         </div>
       </div>
 
       <!-- Game Area -->
       <div class="game-area">
         <p>Roll the dice! Win if you get 4, 5, or 6</p>
+        <p style="font-size: 12px; color: #888; margin-top: 5px;">Bet with ERC-20 Token & Sign Transaction</p>
 
         <div id="dice" class="dice">🎲</div>
 
@@ -237,17 +277,17 @@
           <input
             type="number"
             id="betAmount"
-            value="0.001"
-            min="0.0001"
-            max="1"
-            step="0.0001"
+            value="1"
+            min="0.1"
+            max="1000"
+            step="0.1"
             placeholder="Bet Amount"
           />
-          <span style="line-height: 45px">ETH</span>
+          <span class="token-symbol" id="tokenSymbolDisplay">TOKEN</span>
         </div>
 
         <button id="rollBtn" class="btn btn-roll" disabled>
-          🎰 Roll Dice (Sign Transaction)
+          🎰 Roll Dice (Sign & Transfer Token)
         </button>
 
         <div id="result" class="result" style="display: none"></div>
@@ -262,21 +302,50 @@
 
     <script>
       // ================== CONFIG ==================
-      // MegaETH Testnet (from MEGAETH_INTEGRATION.md)
+      // MegaETH Testnet
       const RPC_URL = "https://carrot.megaeth.com/rpc";
       const CHAIN_ID = 6342; // 0x18c6
       const CHAIN_NAME = "MegaETH Testnet";
+
+      // ERC-20 Token Contract
+      const TOKEN_ADDRESS = "0x10cED494da9C570cEd6005656D3fFCbc6F94f90e";
+      
+      // Standard ERC-20 ABI (only functions we need)
+      const ERC20_ABI = [
+        // Read functions
+        "function name() view returns (string)",
+        "function symbol() view returns (string)",
+        "function decimals() view returns (uint8)",
+        "function balanceOf(address owner) view returns (uint256)",
+        "function allowance(address owner, address spender) view returns (uint256)",
+        // Write functions
+        "function transfer(address to, uint256 amount) returns (bool)",
+        "function approve(address spender, uint256 amount) returns (bool)",
+        // Events
+        "event Transfer(address indexed from, address indexed to, uint256 value)",
+        "event Approval(address indexed owner, address indexed spender, uint256 value)"
+      ];
+
+      // Game treasury address (where tokens are sent when losing / received from when winning)
+      // In a real game, this would be a smart contract
+      const GAME_TREASURY = "0x000000000000000000000000000000000000dEaD"; // Burn address for demo
 
       // ================== GAME STATE ==================
       let wallet = null;
       let privateKey = null;
       let provider = null;
-      let balance = 0; // Native ETH balance
+      let tokenContract = null;
+      let ethBalance = 0;
+      let tokenBalance = 0;
+      let tokenDecimals = 18;
+      let tokenSymbol = "TOKEN";
 
       // ================== DOM ELEMENTS ==================
       const walletStatus = document.getElementById("walletStatus");
       const walletAddress = document.getElementById("walletAddress");
-      const balanceEl = document.getElementById("balance");
+      const ethBalanceEl = document.getElementById("ethBalance");
+      const tokenBalanceEl = document.getElementById("tokenBalance");
+      const tokenSymbolDisplay = document.getElementById("tokenSymbolDisplay");
       const diceEl = document.getElementById("dice");
       const betAmountEl = document.getElementById("betAmount");
       const rollBtn = document.getElementById("rollBtn");
@@ -344,13 +413,24 @@
 
           log(`Wallet initialized: ${addr}`, "success");
 
-          // Fetch native ETH balance from blockchain
-          await fetchBalance();
+          // Initialize token contract
+          tokenContract = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, wallet);
+          log(`Token contract initialized: ${TOKEN_ADDRESS}`);
+
+          // Fetch token info
+          await fetchTokenInfo();
+
+          // Fetch balances
+          await fetchBalances();
 
           rollBtn.disabled = false;
 
           // Notify parent that we're ready
-          notifyParent("GAME_READY", { address: wallet.address });
+          notifyParent("GAME_READY", { 
+            address: wallet.address,
+            tokenAddress: TOKEN_ADDRESS,
+            tokenSymbol: tokenSymbol
+          });
         } catch (error) {
           log(`Error initializing wallet: ${error.message}`, "error");
           walletStatus.textContent = "Error: Invalid key";
@@ -358,38 +438,72 @@
         }
       }
 
-      // ================== FETCH NATIVE ETH BALANCE ==================
-      async function fetchBalance() {
+      // ================== FETCH TOKEN INFO ==================
+      async function fetchTokenInfo() {
+        try {
+          log("Fetching token info...");
+          
+          // Get token symbol and decimals
+          const [symbol, decimals, name] = await Promise.all([
+            tokenContract.symbol(),
+            tokenContract.decimals(),
+            tokenContract.name()
+          ]);
+          
+          tokenSymbol = symbol;
+          tokenDecimals = decimals;
+          tokenSymbolDisplay.textContent = symbol;
+          
+          log(`Token: ${name} (${symbol}), Decimals: ${decimals}`, "success");
+        } catch (error) {
+          log(`Error fetching token info: ${error.message}`, "error");
+          // Use defaults
+          tokenSymbol = "TOKEN";
+          tokenDecimals = 18;
+        }
+      }
+
+      // ================== FETCH BALANCES ==================
+      async function fetchBalances() {
         if (!wallet || !provider) return;
 
         try {
-          log("Fetching ETH balance from MegaETH...");
+          log("Fetching balances...");
 
           // Get native ETH balance
-          const rawBalance = await provider.getBalance(wallet.address);
+          const rawEthBalance = await provider.getBalance(wallet.address);
+          ethBalance = parseFloat(ethers.utils.formatEther(rawEthBalance));
+          ethBalanceEl.textContent = `${ethBalance.toFixed(6)} ETH`;
 
-          // Convert from wei to ETH
-          balance = parseFloat(ethers.utils.formatEther(rawBalance));
+          // Get ERC-20 token balance
+          const rawTokenBalance = await tokenContract.balanceOf(wallet.address);
+          tokenBalance = parseFloat(ethers.utils.formatUnits(rawTokenBalance, tokenDecimals));
+          tokenBalanceEl.textContent = `${tokenBalance.toFixed(4)} ${tokenSymbol}`;
 
-          balanceEl.textContent = `${balance.toFixed(6)} ETH`;
-          log(`Balance fetched: ${balance} ETH`, "success");
+          log(`ETH: ${ethBalance.toFixed(6)}, ${tokenSymbol}: ${tokenBalance.toFixed(4)}`, "success");
         } catch (error) {
-          log(`Error fetching balance: ${error.message}`, "error");
-          balanceEl.textContent = "Error loading";
+          log(`Error fetching balances: ${error.message}`, "error");
+          ethBalanceEl.textContent = "Error";
+          tokenBalanceEl.textContent = "Error";
         }
       }
 
       // ================== GAME LOGIC ==================
       async function rollDice() {
-        if (!wallet) {
+        if (!wallet || !tokenContract) {
           log("No wallet connected!", "error");
           return;
         }
 
         const betAmount = parseFloat(betAmountEl.value);
 
-        if (betAmount > balance) {
-          log("Insufficient balance!", "error");
+        if (betAmount > tokenBalance) {
+          log(`Insufficient ${tokenSymbol} balance! You have ${tokenBalance.toFixed(4)} ${tokenSymbol}`, "error");
+          return;
+        }
+
+        if (betAmount <= 0) {
+          log("Bet amount must be greater than 0!", "error");
           return;
         }
 
@@ -398,37 +512,46 @@
         diceEl.classList.add("rolling");
         resultEl.style.display = "none";
 
-        log(`Placing bet: ${betAmount} ETH`);
+        log(`Placing bet: ${betAmount} ${tokenSymbol}`);
 
         try {
-          // ============ SIGN TRANSACTION ============
-          // This is the key part - signing a message/transaction with the privateKey
+          // ============ SIGN & SEND TOKEN TRANSACTION ============
+          // Convert bet amount to token units (with decimals)
+          const betAmountWei = ethers.utils.parseUnits(betAmount.toString(), tokenDecimals);
 
+          // Create game data for signing
           const gameData = {
             action: "ROLL_DICE",
             betAmount: betAmount,
+            token: TOKEN_ADDRESS,
+            tokenSymbol: tokenSymbol,
             timestamp: Date.now(),
             nonce: Math.random().toString(36).substring(7),
           };
 
           const message = JSON.stringify(gameData);
-          log(`Signing message: ${message.substring(0, 50)}...`);
+          log(`Signing message: ${message.substring(0, 60)}...`);
 
           // Sign the message using the wallet
           const signature = await wallet.signMessage(message);
           log(`Signature created: ${signature.substring(0, 30)}...`, "success");
 
           // Verify signature (demo)
-          const recoveredAddress = ethers.utils.verifyMessage(
-            message,
-            signature
-          );
-          log(
-            `Signature verified. Recovered: ${recoveredAddress.substring(
-              0,
-              10
-            )}...`
-          );
+          const recoveredAddress = ethers.utils.verifyMessage(message, signature);
+          log(`Signature verified. Recovered: ${recoveredAddress.substring(0, 10)}...`);
+
+          // ============ TRANSFER TOKEN (Optional - for real betting) ============
+          // Uncomment below to actually transfer tokens when playing
+          /*
+          log(`Transferring ${betAmount} ${tokenSymbol} to game treasury...`);
+          const tx = await tokenContract.transfer(GAME_TREASURY, betAmountWei);
+          log(`Transaction sent: ${tx.hash.substring(0, 20)}...`);
+          await tx.wait();
+          log(`Transaction confirmed!`, "success");
+          */
+
+          // For demo, we'll just simulate the game without actual transfer
+          log(`[DEMO MODE] Simulating token transfer...`);
 
           // ============ GAME RESULT ============
           // Simulate dice roll (in real game, this would come from blockchain/server)
@@ -444,34 +567,35 @@
 
           // Update local balance (in real game, this would refetch from blockchain)
           if (isWin) {
-            balance += betAmount;
-            log(`WIN! Dice: ${diceResult}, Won: ${betAmount} ETH`, "success");
+            tokenBalance += betAmount;
+            log(`WIN! Dice: ${diceResult}, Won: ${betAmount} ${tokenSymbol}`, "success");
           } else {
-            balance -= betAmount;
-            log(`LOSE! Dice: ${diceResult}, Lost: ${betAmount} ETH`, "error");
+            tokenBalance -= betAmount;
+            log(`LOSE! Dice: ${diceResult}, Lost: ${betAmount} ${tokenSymbol}`, "error");
           }
 
-          balanceEl.textContent = `${balance.toFixed(6)} ETH`;
+          tokenBalanceEl.textContent = `${tokenBalance.toFixed(4)} ${tokenSymbol}`;
 
           // Show result
           resultEl.style.display = "block";
           resultEl.className = `result ${isWin ? "win" : "lose"}`;
           resultEl.innerHTML = isWin
-            ? `🎉 You WIN! Rolled ${diceResult}. Won ${betAmount} ETH!`
-            : `😢 You LOSE! Rolled ${diceResult}. Lost ${betAmount} ETH.`;
+            ? `🎉 You WIN! Rolled ${diceResult}. Won ${betAmount} ${tokenSymbol}!`
+            : `😢 You LOSE! Rolled ${diceResult}. Lost ${betAmount} ${tokenSymbol}.`;
 
           // ============ NOTIFY PARENT ============
-          // This tells the parent (Sunrise Gaming) that a game action happened
           notifyParent("GAME_PLAY", {
             syncSusd: "True",
             result: isWin ? "WIN" : "LOSE",
             diceResult,
             betAmount,
+            token: TOKEN_ADDRESS,
+            tokenSymbol: tokenSymbol,
             signature: signature.substring(0, 20) + "...",
           });
 
-          // Refresh balance from blockchain after game
-          setTimeout(fetchBalance, 2000);
+          // Refresh balance from blockchain after game (in real implementation)
+          setTimeout(fetchBalances, 2000);
         } catch (error) {
           log(`Error during game: ${error.message}`, "error");
           diceEl.classList.remove("rolling");
@@ -501,6 +625,7 @@
       log("Demo Game loaded. Waiting for privateKey from parent...");
       log(`Network: ${CHAIN_NAME}`);
       log(`RPC: ${RPC_URL}`);
+      log(`Token: ${TOKEN_ADDRESS}`);
 
       // For standalone testing (without iframe)
       // Uncomment below to test directly with a test private key:
