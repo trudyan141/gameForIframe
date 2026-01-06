@@ -1,0 +1,1 @@
+export const rpcUrl = 'https://timothy.megaeth.com/rpc'
