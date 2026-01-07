@@ -7,7 +7,16 @@ import { GameScreen } from '@/components/GameScreen'
 import { defaultBackendService } from '@/services/backend.service'
 import { ethers } from 'ethers'
 import { rpcUrl } from '@/config'
-import { ENTRY_POINT_ADDRESS } from '@/constants'
+import { 
+  ENTRY_POINT_ADDRESS, 
+  TOKEN_ADDRESS, 
+  PAYMASTER_ADDRESS, 
+  DELEGATOR_ADDRESS,
+  TOKEN_ABI, 
+  DELEGATION_ACCOUNT_ABI, 
+  STAKING_ABI, 
+  PAYMASTER_ABI 
+} from '@/constants'
 
 // ========== DEMO MODE ==========
 // Set to true to bypass parent iframe confirmation for testing
@@ -30,6 +39,7 @@ export default function Home() {
   const [rolling, setRolling] = useState(false)
   const [diceValues, setDiceValues] = useState<[number, number, number]>([1, 1, 1])
   const [gameResult, setGameResult] = useState<{ success: boolean; message: string; isWin: boolean; total: number } | null>(null)
+  const [payRewardAddress, setPayRewardAddress] = useState(PAYMASTER_ADDRESS)
 
   const addLog = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const newLog: Log = {
@@ -134,6 +144,16 @@ export default function Home() {
           handleRefreshBalance()
         } else {
           addLog(`❌ Reward failed: ${value.error || 'Unknown error'}`, 'error')
+        }
+      }
+
+      if (data.type === 'HOUSE_CHANGED') {
+        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as {
+          addressPaysReward: string;
+        }
+        if (value.addressPaysReward) {
+          setPayRewardAddress(value.addressPaysReward)
+          addLog(`🏠 House updated: ${value.addressPaysReward.substring(0, 10)}...`, 'info')
         }
       }
     }
@@ -283,11 +303,37 @@ export default function Home() {
     try {
       addLog(`Building UserOperation for ${isWin ? 'WIN' : 'LOSS'}...`, 'info')
       
+      const provider = new ethers.JsonRpcProvider(rpcUrl)
+        // Build callData locally
+      const delegationAccountIface = new ethers.Interface(DELEGATION_ACCOUNT_ABI)
+      const tokenIface = new ethers.Interface(TOKEN_ABI)
+      const paymasterContract = new ethers.Contract(PAYMASTER_ADDRESS, PAYMASTER_ABI, provider)
+
+      // Get required fee from paymaster
+      const requiredTokenFee = await paymasterContract.requiredFee()
+      console.log(`Required paymaster fee: ${ethers.formatUnits(requiredTokenFee, 18)} tokens`)
+
+      // Prepare transfer amounts
+      const transferAmount = ethers.parseUnits(amount.toString(), 18)
+      console.log(`transferAmount: ${transferAmount}`)
+      // Encode transfer calldata (to recipient)
+      console.log(`payRewardAddress: ${payRewardAddress}`) // casino house selected that will receive the bet amount and pay reward when win
+      console.log(`requiredTokenFee: ${requiredTokenFee}`)
+      const tTransfer = tokenIface.encodeFunctionData('transfer', [payRewardAddress, transferAmount])
+      
+      // Encode paymaster fee calldata
+      const tPayFee = tokenIface.encodeFunctionData('transfer', [PAYMASTER_ADDRESS, requiredTokenFee])
+
+      // Build executeBatch callData with both transfers
+      const callData = delegationAccountIface.encodeFunctionData('executeBatch', [[
+          { target: TOKEN_ADDRESS, value: 0, data: tTransfer },
+          { target: TOKEN_ADDRESS, value: 0, data: tPayFee }
+      ]])
+
       // Step 1: Request backend to build UserOp
-      // Using buildStakingUserOp as requested by user example
-      const buildResult = await defaultBackendService.buildStakingUserOp({
-        accountAddress: walletAddress,
-        amount: amount.toString(),
+      const buildResult = await defaultBackendService.buildUserOp({
+        senderAddress: walletAddress,
+        callData,
       })
 
       const userOpHash = buildResult.userOpHash 
@@ -311,7 +357,7 @@ export default function Home() {
       }
 
       addLog('Submitting UserOperation to operator...', 'info')
-      const result = await defaultBackendService.submitStakeUserOp({
+      const result = await defaultBackendService.submitUserOp({
         userOp: signedUserOp,
         entryPointAddress: ENTRY_POINT_ADDRESS,
       })
@@ -321,8 +367,9 @@ export default function Home() {
         // Automatically refresh balance from blockchain
         await handleRefreshBalance()
       }
-    } catch (error: any) {
-      addLog(`BE Error: ${error.message}`, 'error')
+    } catch (error) {
+      const err = error as Error
+      addLog(`BE Error: ${err.message}`, 'error')
       throw error
     }
   }

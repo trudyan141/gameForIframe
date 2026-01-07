@@ -49,7 +49,6 @@ export class BackendService {
 
     return result as {
       userOp: any;
-      userOpHash: string;
     };
   }
 
@@ -137,6 +136,49 @@ export class BackendService {
       txHash: string;
       blockNumber: number;
       isRevoked: boolean;
+    };
+  }
+
+  async buildUserOp(params: {
+    senderAddress: string;
+    callData: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.buildUserOp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to build UserOp');
+    }
+
+    return result as {
+      userOp: import('./erc4337.service').UserOperation;
+      userOpHash: string;
+    };
+  }
+
+  async submitUserOp(params: {
+    userOp: any;
+    entryPointAddress: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.stake, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to submit UserOp');
+    }
+
+    return result as {
+      success: boolean;
+      txHash: string;
+      blockNumber: number;
     };
   }
 }

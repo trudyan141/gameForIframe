@@ -21,4 +21,5 @@ export const API_ENDPOINTS = {
   buildLoginUserOp: `${BACKEND_API_URL}/api/userop-builder/login`,
   buildStakingUserOp: `${BACKEND_API_URL}/api/userop-builder/staking`,
   buildLogoutUserOp: `${BACKEND_API_URL}/api/userop-builder/logout`,
+  buildUserOp: `${BACKEND_API_URL}/api/userop-builder/build`,
 } as const;
