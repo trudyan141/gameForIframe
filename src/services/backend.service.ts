@@ -1,71 +1,144 @@
-import { SessionKeyData } from './erc4337.service'
-
-export interface PlayParams {
-  accountAddress: string
-  isWin: boolean
-  winAmount: number  // Positive if win, negative if lose
-  diceValues: [number, number, number]
-  total: number
-  choice: 'big' | 'small'
-}
+import { API_ENDPOINTS } from '@/config/api';
 
 export class BackendService {
-  private static instance: BackendService
-  private registeredSessions: Map<string, SessionKeyData> = new Map()
+  private baseUrl: string;
 
-  private constructor() {}
-
-  public static getInstance(): BackendService {
-    if (!BackendService.instance) {
-      BackendService.instance = new BackendService()
-    }
-    return BackendService.instance
+  constructor(baseUrl: string = process.env.NEXT_PUBLIC_BACKEND_URL || "") {
+    this.baseUrl = baseUrl;
   }
 
-  /**
-   * Register a new session key with the backend
-   */
-  async registerSessionKey(sessionData: SessionKeyData): Promise<{ success: boolean; message: string }> {
-    console.log('[Backend] Registering session key:', sessionData.sessionPublicKey)
-    
-    await new Promise(resolve => setTimeout(resolve, 800))
-    
-    this.registeredSessions.set(sessionData.sessionPublicKey.toLowerCase(), sessionData)
-    
-    return {
-      success: true,
-      message: 'Session key registered successfully'
+  async addDelegator(params: {
+    userOp: any;
+    entryPointAddress: string;
+    sessionWalletAddress: string;
+    accountAddress: string;
+    delegatorAddress: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.addDelegator, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to submit delegation UserOp');
     }
+
+    return result as {
+      success: boolean;
+      txHash: string;
+      blockNumber: number;
+    };
   }
 
-  /**
-   * Submit game result to backend for contract signing
-   * FE already determined win/lose, BE just needs to execute the contract call
-   */
-  async submitPlay(params: PlayParams): Promise<{ success: boolean; message: string; txHash?: string }> {
-    console.log('[Backend] Processing game result:', {
-      account: params.accountAddress,
-      isWin: params.isWin,
-      amount: params.winAmount,
-      dice: params.diceValues,
-      total: params.total
-    })
-    
-    // Simulate contract signing delay
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    // In production: BE would use session key to sign UserOp
-    // and call smart contract to transfer tokens based on result
-    const txHash = '0x' + Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)
-    
-    console.log('[Backend] Contract signed. TxHash:', txHash)
-    
-    return {
-      success: true,
-      message: params.isWin ? 'Win processed!' : 'Loss processed.',
-      txHash
+  async buildStakingUserOp(params: {
+    accountAddress: string;
+    amount: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.buildStakingUserOp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to build staking UserOp');
     }
+
+    return result as {
+      userOp: any;
+      userOpHash: string;
+    };
+  }
+
+  async submitStakeUserOp(params: {
+    userOp: any;
+    entryPointAddress: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.stake, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to submit staking UserOp');
+    }
+
+    return result as {
+      success: boolean;
+      txHash: string;
+      blockNumber: number;
+    };
+  }
+  async buildLoginUserOp(params: {
+    accountAddress: string;
+    sessionAddress: string;
+    expiryDuration: number;
+  }) {
+    const response = await fetch(API_ENDPOINTS.buildLoginUserOp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to build login UserOp');
+    }
+
+    return result as {
+      userOp: import('./erc4337.service').UserOperation;
+      userOpHash: string;
+    };
+  }
+
+  async buildLogoutUserOp(params: {
+    accountAddress: string;
+    sessionAddress: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.buildLogoutUserOp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to build logout UserOp');
+    }
+
+    return result as {
+      userOp: import('./erc4337.service').UserOperation;
+      userOpHash: string;
+    };
+  }
+
+  async revokeDelegator(params: {
+    userOp: import('./erc4337.service').UserOperation;
+    entryPointAddress: string;
+  }) {
+    const response = await fetch(API_ENDPOINTS.revokeDelegator, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to revoke delegator');
+    }
+
+    return result as {
+      success: boolean;
+      txHash: string;
+      blockNumber: number;
+      isRevoked: boolean;
+    };
   }
 }
 
-export const backendService = BackendService.getInstance()
+export const defaultBackendService = new BackendService();

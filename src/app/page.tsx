@@ -4,9 +4,10 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { TransactionLog, Log } from '@/components/TransactionLog'
 import { PlayScreen } from '@/components/PlayScreen'
 import { GameScreen } from '@/components/GameScreen'
-import { backendService } from '@/services/backend.service'
+import { defaultBackendService } from '@/services/backend.service'
 import { ethers } from 'ethers'
 import { rpcUrl } from '@/config'
+import { ENTRY_POINT_ADDRESS } from '@/constants'
 
 // ========== DEMO MODE ==========
 // Set to true to bypass parent iframe confirmation for testing
@@ -41,6 +42,30 @@ export default function Home() {
     console.log(`[Game] ${message}`)
   }, [])
 
+  const handleRefreshBalance = useCallback(async () => {
+    if (!walletAddress || !tokenAddress) {
+      addLog('Wallet not connected', 'error')
+      return
+    }
+
+    addLog('Refreshing balance...', 'info')
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl)
+      const tokenContract = new ethers.Contract(
+        tokenAddress,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider
+      )
+      
+      const balance = await tokenContract.balanceOf(walletAddress)
+      const formattedBalance = ethers.formatUnits(balance, 18) // USDT is 18 decimals
+      setTokenBalance(formattedBalance)
+      addLog(`Balance updated: ${formattedBalance} ${tokenSymbol}`, 'success')
+    } catch (err: any) {
+      addLog(`Refresh error: ${err.message}`, 'error')
+    }
+  }, [walletAddress, tokenAddress, addLog, tokenSymbol])
+
   // Listen for parent messages
   useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
@@ -48,11 +73,24 @@ export default function Home() {
       if (!data) return
 
       if (data.type === 'WALLET_CONFIRMED') {
-        const value = typeof data.value === 'string' ? JSON.parse(data.value) : data.value
-        const { abstractAccountAddress, tokenAddress: tokenAddr, tx } = value
+        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as { 
+          status: string; 
+          abstractAccountAddress: string; 
+          tokenAddress: string; 
+          tx: string; 
+          error?: string 
+        }
+        const { status, abstractAccountAddress, tokenAddress: tokenAddr, tx, error } = value
         
+        if (status === 'FAIL') {
+          addLog(`❌ Parent confirmation failed: ${error || 'Unknown error'}`, 'error')
+          setRolling(false)
+          setIsWaitingForParent(false)
+          return
+        }
+
         addLog(`Parent confirmed! Tx: ${tx?.substring(0, 10)}...`, 'success')
-        addLog(`Abstract Account: ${abstractAccountAddress.substring(0, 8)}...`, 'info')
+        addLog(`Abstract Account: ${abstractAccountAddress?.substring(0, 8)}...`, 'info')
         
         try {
           // Store addresses
@@ -68,24 +106,41 @@ export default function Home() {
           )
           
           const balance = await tokenContract.balanceOf(abstractAccountAddress)
-          const formattedBalance = ethers.formatUnits(balance, 6) // USDT is 6 decimals
+          const formattedBalance = ethers.formatUnits(balance, 18) // USDT is 18 decimals
           setTokenBalance(formattedBalance)
           
           addLog(`USDT Balance: ${formattedBalance}`, 'success')
           setRolling(false)
           setGameState('ROLL_DICE')
-        } catch (err: any) {
+        } catch (error) {
+          const err = error as Error
           addLog(`Error: ${err.message}`, 'error')
         } finally {
           setIsWaitingForParent(false)
           setRolling(false)
         }
       }
+
+      if (data.type === 'REWARD_SENT') {
+        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as {
+          status: 'success' | 'failure';
+          txHash?: string;
+          rewardAmount?: string | number;
+          error?: string;
+        }
+
+        if (value.status === 'success') {
+          addLog(`🎁 Reward received: ${value.rewardAmount} USDT. TX: ${value.txHash?.substring(0, 10)}...`, 'success')
+          handleRefreshBalance()
+        } else {
+          addLog(`❌ Reward failed: ${value.error || 'Unknown error'}`, 'error')
+        }
+      }
     }
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [tempOwnerPk, addLog])
+  }, [tempOwnerPk, addLog, handleRefreshBalance])
 
   // Landing logic
   useEffect(() => {
@@ -134,8 +189,9 @@ export default function Home() {
       }
 
       setIsWaitingForParent(true)
-    } catch (error: any) {
-      addLog(`Error: ${error.message}`, 'error')
+    } catch (error) {
+      const err = error as Error
+      addLog(`Error: ${err.message}`, 'error')
       setRolling(false)
     }
   }
@@ -167,10 +223,8 @@ export default function Home() {
       const isWin = (choice === 'big' && isBig) || (choice === 'small' && !isBig)
       const winAmount = isWin ? amount : -amount
 
-      // Update local balance
-      const currentBalance = parseFloat(tokenBalance)
-      const newBalance = currentBalance + winAmount
-      setTokenBalance(newBalance.toFixed(0))
+      // Local balance update removed - we will sync from blockchain after BE submission
+      // to ensure consistency and avoid calculation mismatches.
 
       setGameResult({
         success: true,
@@ -181,26 +235,14 @@ export default function Home() {
 
       if (isWin) {
         addLog(`🎉 WIN! Dice: [${diceValues.join(', ')}] = ${total} (${isBig ? 'BIG' : 'SMALL'})`, 'success')
-        addLog(`+${amount} ${tokenSymbol} added to balance`, 'success')
       } else {
         addLog(`😢 LOSE! Dice: [${diceValues.join(', ')}] = ${total} (${isBig ? 'BIG' : 'SMALL'})`, 'error')
-        addLog(`-${amount} ${tokenSymbol} deducted from balance`, 'error')
       }
 
-      // Submit result to backend for contract signing
-      addLog(`Submitting to BE: ${walletAddress.substring(0, 8)}... | ${isWin ? 'WIN' : 'LOSE'} ${winAmount}`, 'info')
-      const beResult = await backendService.submitPlay({
-        accountAddress: walletAddress,
-        isWin,
-        winAmount,
-        diceValues,
-        total,
-        choice
+      // Submit result to backend for UserOp execution (Background)
+      submitResultToBE(amount, isWin).catch(err => {
+        addLog(`Backend sync failed: ${err.message}`, 'error')
       })
-
-      if (beResult.success) {
-        addLog(`✅ Contract signed! Tx: ${beResult.txHash?.substring(0, 16)}...`, 'success')
-      }
 
       // Notify parent with result
       if (window.parent !== window) {
@@ -212,22 +254,80 @@ export default function Home() {
             total,
             choice,
             winAmount,
-            txHash: beResult.txHash
           }) 
         }, '*')
       }
-    } catch (error: any) {
-      addLog(`Error: ${error.message}`, 'error')
-      setGameResult({
-        success: false,
-        message: error.message,
-        isWin: false,
-        total: 0
-      })
+    } catch (error) {
+      const err = error as Error
+      addLog(`Game Error: ${err.message}`, 'error')
+      // Only set error result if we haven't calculated dice values yet
+      if (!gameResult) {
+        setGameResult({
+          success: false,
+          message: err.message,
+          isWin: false,
+          total: 0
+        })
+      }
     } finally {
       setRolling(false)
     }
   }
+
+  const submitResultToBE = async (amount: number, isWin: boolean) => {
+    if (!walletAddress || !tempOwnerPk) {
+      addLog('Missing wallet info for BE submission', 'error')
+      return
+    }
+
+    try {
+      addLog(`Building UserOperation for ${isWin ? 'WIN' : 'LOSS'}...`, 'info')
+      
+      // Step 1: Request backend to build UserOp
+      // Using buildStakingUserOp as requested by user example
+      const buildResult = await defaultBackendService.buildStakingUserOp({
+        accountAddress: walletAddress,
+        amount: amount.toString(),
+      })
+
+      const userOpHash = buildResult.userOpHash 
+      
+      if (!userOpHash) {
+        addLog('BE build failed: No UserOp hash returned', 'error')
+        return
+      }
+
+      addLog(`✓ UserOp built. Hash: ${userOpHash.substring(0, 16)}...`, 'success')
+
+      // Step 2: Sign UserOp hash with local session wallet (tempOwnerPk)
+      const wallet = new ethers.Wallet(tempOwnerPk)
+      const signature = await wallet.signMessage(ethers.getBytes(userOpHash))
+      addLog('✓ Signature created', 'success')
+
+      // Step 3: Attach signature and submit
+      const signedUserOp = {
+        ...buildResult.userOp,
+        signature,
+      }
+
+      addLog('Submitting UserOperation to operator...', 'info')
+      const result = await defaultBackendService.submitStakeUserOp({
+        userOp: signedUserOp,
+        entryPointAddress: ENTRY_POINT_ADDRESS,
+      })
+
+      if (result.success) {
+        addLog(`✅ Game result on-chain! Tx: ${result.txHash.substring(0, 16)}...`, 'success')
+        // Automatically refresh balance from blockchain
+        await handleRefreshBalance()
+      }
+    } catch (error: any) {
+      addLog(`BE Error: ${error.message}`, 'error')
+      throw error
+    }
+  }
+
+
 
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
@@ -250,6 +350,7 @@ export default function Home() {
               balanceToken={parseFloat(tokenBalance)}
               tokenSymbol={tokenSymbol}
               result={gameResult}
+              onRefresh={handleRefreshBalance}
             />
           )}
 

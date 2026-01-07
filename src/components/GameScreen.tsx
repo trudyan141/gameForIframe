@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Coins, TrendingUp, TrendingDown, Trophy, Frown } from 'lucide-react'
+import { Coins, TrendingUp, TrendingDown, Trophy, Frown, RefreshCw } from 'lucide-react'
 import { Dice } from './Dice'
 
 interface GameScreenProps {
@@ -12,6 +12,7 @@ interface GameScreenProps {
   balanceToken: number
   tokenSymbol: string
   result: { success: boolean; message: string; isWin: boolean; total: number } | null
+  onRefresh?: () => void
 }
 
 export const GameScreen: React.FC<GameScreenProps> = ({
@@ -21,6 +22,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({
   balanceToken,
   tokenSymbol,
   result,
+  onRefresh,
 }) => {
   const [betAmount, setBetAmount] = useState('10')
   const [choice, setChoice] = useState<'big' | 'small' | null>(null)
@@ -112,9 +114,21 @@ export const GameScreen: React.FC<GameScreenProps> = ({
       <div className="w-full max-w-xs space-y-3">
         <div className="flex justify-between items-center px-1">
           <span className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-500">Bet Amount</span>
-          <span className="text-[10px] font-bold text-slate-600">
-            Balance: {balanceToken.toFixed(0)} {tokenSymbol}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-600">
+              Balance: {balanceToken.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })} {tokenSymbol}
+            </span>
+            {onRefresh && (
+              <button 
+                onClick={onRefresh}
+                disabled={rolling}
+                className="text-slate-500 hover:text-amber-500 transition-colors disabled:opacity-50"
+                title="Refresh Balance"
+              >
+                <RefreshCw size={12} className={rolling ? 'animate-spin' : ''} />
+              </button>
+            )}
+          </div>
         </div>
         
         <div className="relative">
