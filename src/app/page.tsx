@@ -337,7 +337,7 @@ export default function Home() {
       })
 
       const userOpHash = buildResult.userOpHash 
-      
+      console.log(`userOpHash: ${userOpHash}`)
       if (!userOpHash) {
         addLog('BE build failed: No UserOp hash returned', 'error')
         return
@@ -355,7 +355,7 @@ export default function Home() {
         ...buildResult.userOp,
         signature,
       }
-
+      console.log(`signedUserOp: ${JSON.stringify(signedUserOp)}`)
       addLog('Submitting UserOperation to operator...', 'info')
       const result = await defaultBackendService.submitUserOp({
         userOp: signedUserOp,
