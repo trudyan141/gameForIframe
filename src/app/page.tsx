@@ -260,10 +260,7 @@ export default function Home() {
       }
 
       // Submit result to backend for UserOp execution (Background)
-      submitResultToBE(amount, isWin).catch(err => {
-        addLog(`Backend sync failed: ${err.message}`, 'error')
-      })
-
+      await submitResultToBE(amount, isWin)
       // Notify parent with result
       if (window.parent !== window) {
         window.parent.postMessage({ 
