@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { TransactionLog, Log } from '@/components/TransactionLog'
 import { PlayScreen } from '@/components/PlayScreen'
 import { GameScreen } from '@/components/GameScreen'
+import { LogOut } from 'lucide-react'
 import { defaultBackendService } from '@/services/backend.service'
 import { ethers } from 'ethers'
 import { rpcUrl } from '@/config'
@@ -15,7 +16,8 @@ import {
   TOKEN_ABI, 
   DELEGATION_ACCOUNT_ABI, 
   STAKING_ABI, 
-  PAYMASTER_ABI 
+  PAYMASTER_ABI,
+  DELEGATOR_ABI
 } from '@/constants'
 
 // ========== DEMO MODE ==========
@@ -40,6 +42,7 @@ export default function Home() {
   const [diceValues, setDiceValues] = useState<[number, number, number]>([1, 1, 1])
   const [gameResult, setGameResult] = useState<{ success: boolean; message: string; isWin: boolean; total: number } | null>(null)
   const [payRewardAddress, setPayRewardAddress] = useState(PAYMASTER_ADDRESS)
+  const [loggingOut, setLoggingOut] = useState(false)
 
   const addLog = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const newLog: Log = {
@@ -373,9 +376,120 @@ export default function Home() {
 
 
 
+  const handleLogout = async () => {
+    if (!walletAddress || !tempOwnerPk) {
+      addLog('No active session to logout', 'error')
+      return
+    }
+
+    setLoggingOut(true)
+    addLog('🔄 Revoking delegation...', 'info')
+
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl)
+      const delegatorIface = new ethers.Interface(DELEGATOR_ABI)
+      const tokenIface = new ethers.Interface(TOKEN_ABI)
+      const delegationAccountIface = new ethers.Interface(DELEGATION_ACCOUNT_ABI)
+      const paymasterContract = new ethers.Contract(PAYMASTER_ADDRESS, PAYMASTER_ABI, provider)
+
+      // Get paymaster fee
+      const requiredFee = await paymasterContract.requiredFee()
+
+      const sessionWallet = new ethers.Wallet(tempOwnerPk)
+      const sessionAddress = sessionWallet.address
+
+      // Encode calls
+      const removeDelegatorData = delegatorIface.encodeFunctionData('removeDelegatorOnBehalfOf', [
+        sessionAddress,
+      ])
+      const payFeeData = tokenIface.encodeFunctionData('transfer', [
+        PAYMASTER_ADDRESS,
+        requiredFee,
+      ])
+
+      // Build executeBatch calldata
+      const callData = delegationAccountIface.encodeFunctionData('executeBatch', [
+        [
+          { target: DELEGATOR_ADDRESS, value: 0, data: removeDelegatorData },
+          { target: TOKEN_ADDRESS, value: 0, data: payFeeData },
+        ],
+      ])
+
+      // Step 1: Request backend to build UserOp
+      const buildResult = await defaultBackendService.buildUserOp({
+        senderAddress: walletAddress,
+        callData,
+      })
+
+      const userOpHash = buildResult.userOpHash
+      if (!userOpHash) {
+        throw new Error('Failed to build logout UserOp')
+      }
+
+      addLog('✓ Logout UserOp built', 'success')
+
+      // Step 2: Session wallet signs the revocation UserOp hash
+      const signature = await sessionWallet.signMessage(ethers.getBytes(userOpHash))
+      addLog('✓ Signature created', 'success')
+
+      // Step 3: Attach signature to UserOp and submit
+      const signedUserOp = {
+        ...buildResult.userOp,
+        signature,
+      }
+
+      addLog('Submitting revocation to operator...', 'info')
+      const result = await defaultBackendService.revokeDelegator({
+        userOp: signedUserOp,
+        entryPointAddress: ENTRY_POINT_ADDRESS,
+      })
+
+      if (result.success) {
+        addLog(`✅ Delegation revoked! Tx: ${result.txHash.substring(0, 10)}...`, 'success')
+        
+        // Notify parent 
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'GAME_LOGOUT' }, '*')
+        }
+
+        // Reset state
+        setWalletAddress('')
+        setTempOwnerPk('')
+        setTokenBalance('0')
+        setGameState('PLAY')
+        setGameResult(null)
+        addLog('🚪 Logged out from game session', 'info')
+      }
+    } catch (error: any) {
+      console.error('Revocation error:', error)
+      addLog(`❌ Logout error: ${error.message}`, 'error')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-6">
+    <main className="flex min-h-screen items-center justify-center p-4 relative">
+      {/* Logout Button */}
+      {walletAddress && (
+        <button
+          onClick={handleLogout}
+          disabled={loggingOut}
+          className="absolute top-4 right-4 glass-button px-4 py-2 rounded-xl flex items-center gap-2 text-slate-400 hover:text-red-400 transition-all z-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Logout"
+        >
+          {loggingOut ? (
+            <div className="w-4 h-4 border-2 border-red-400/20 border-t-red-400 rounded-full animate-spin" />
+          ) : (
+            <LogOut size={18} />
+          )}
+          <span className="text-xs font-bold uppercase tracking-wider">
+            {loggingOut ? 'Logging out...' : 'Logout'}
+          </span>
+        </button>
+      )}
+
+      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-[1fr,320px] gap-6">
         {/* Left: Game Card */}
         <div className="glass rounded-3xl p-6 border-glow">
           {gameState === 'PLAY' && (
