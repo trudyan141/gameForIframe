@@ -41,7 +41,7 @@ export default function Home() {
   const [rolling, setRolling] = useState(false)
   const [diceValues, setDiceValues] = useState<[number, number, number]>([1, 1, 1])
   const [gameResult, setGameResult] = useState<{ success: boolean; message: string; isWin: boolean; total: number } | null>(null)
-  const [payRewardAddress, setPayRewardAddress] = useState(PAYMASTER_ADDRESS)
+  const [payRewardAddress, setPayRewardAddress] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
 
   const addLog = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
