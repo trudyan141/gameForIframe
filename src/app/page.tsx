@@ -6,6 +6,7 @@ import { PlayScreen } from '@/components/PlayScreen'
 import { GameScreen } from '@/components/GameScreen'
 import { LogOut } from 'lucide-react'
 import { defaultBackendService } from '@/services/backend.service'
+import { eventBridge, GameMessageType } from '@/services/event-bridge'
 import { ethers } from 'ethers'
 import { rpcUrl } from '@/config'
 import { 
@@ -81,18 +82,9 @@ export default function Home() {
 
   // Listen for parent messages
   useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
-      const data = event.data
-      if (!data) return
-
-      if (data.type === 'WALLET_CONFIRMED') {
-        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as { 
-          status: string; 
-          abstractAccountAddress: string; 
-          tokenAddress: string; 
-          tx: string; 
-          error?: string 
-        }
+    return eventBridge.listen(async (event) => {
+      if (event.type === GameMessageType.WALLET_CONFIRMED) {
+        const value = event.value as any; // Typed in Bridge but we keep handling here for robustness
         const { status, abstractAccountAddress, tokenAddress: tokenAddr, tx, error } = value
         
         if (status === 'FAIL') {
@@ -134,14 +126,8 @@ export default function Home() {
         }
       }
 
-      if (data.type === 'REWARD_SENT') {
-        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as {
-          status: 'success' | 'failure';
-          txHash?: string;
-          rewardAmount?: string | number;
-          error?: string;
-        }
-
+      if (event.type === GameMessageType.REWARD_SENT) {
+        const value = event.value as any;
         if (value.status === 'success') {
           addLog(`🎁 Reward received: ${value.rewardAmount} USDT. TX: ${value.txHash?.substring(0, 10)}...`, 'success')
           handleRefreshBalance()
@@ -150,20 +136,15 @@ export default function Home() {
         }
       }
 
-      if (data.type === 'HOUSE_CHANGED') {
-        const value = (typeof data.value === 'string' ? JSON.parse(data.value) : data.value) as {
-          addressPaysReward: string;
-        }
+      if (event.type === GameMessageType.HOUSE_CHANGED) {
+        const value = event.value as any;
         if (value.addressPaysReward) {
           setPayRewardAddress(value.addressPaysReward)
           addLog(`🏠 House updated: ${value.addressPaysReward.substring(0, 10)}...`, 'info')
         }
       }
-    }
-
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [tempOwnerPk, addLog, handleRefreshBalance])
+    });
+  }, [handleRefreshBalance, addLog])
 
   // Landing logic
   useEffect(() => {
@@ -202,14 +183,7 @@ export default function Home() {
       addLog('Waiting for parent authorization...', 'info')
 
       // Send wallet address to parent
-      if (window.parent !== window) {
-        window.parent.postMessage({ 
-          type: 'WALLET_CREATED', 
-          value: JSON.stringify({ 
-            walletAddress: walletAddress
-          }) 
-        }, '*')
-      }
+      eventBridge.send(GameMessageType.WALLET_CREATED, { walletAddress })
 
       setIsWaitingForParent(true)
     } catch (error) {
@@ -265,18 +239,13 @@ export default function Home() {
       // Submit result to backend for UserOp execution (Background)
       await submitResultToBE(amount, isWin)
       // Notify parent with result
-      if (window.parent !== window) {
-        window.parent.postMessage({ 
-          type: 'GAME_PLAY_RESULT', 
-          value: JSON.stringify({ 
-            isWin, 
-            diceValues,
-            total,
-            choice,
-            winAmount,
-          }) 
-        }, '*')
-      }
+      eventBridge.send(GameMessageType.GAME_PLAY_RESULT, {
+        isWin,
+        diceValues,
+        total,
+        choice,
+        winAmount,
+      })
     } catch (error) {
       const err = error as Error
       addLog(`Game Error: ${err.message}`, 'error')
@@ -448,9 +417,7 @@ export default function Home() {
         addLog(`✅ Delegation revoked! Tx: ${result.txHash.substring(0, 10)}...`, 'success')
         
         // Notify parent 
-        if (window.parent !== window) {
-          window.parent.postMessage({ type: 'GAME_LOGOUT' }, '*')
-        }
+        eventBridge.send(GameMessageType.GAME_LOGOUT)
 
         // Reset state
         setWalletAddress('')

@@ -1,1 +1,1 @@
-export const rpcUrl = 'https://timothy.megaeth.com/rpc'
+export const rpcUrl = 'https://carrot.megaeth.com/rpc'
