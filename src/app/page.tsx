@@ -1,6 +1,7 @@
 "use client"
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { TransactionLog, Log } from '@/components/TransactionLog'
 import { PlayScreen } from '@/components/PlayScreen'
 import { GameScreen } from '@/components/GameScreen'
@@ -15,11 +16,13 @@ import {
   PAYMASTER_ADDRESS, 
   DELEGATOR_ADDRESS,
   TOKEN_ABI, 
-  DELEGATION_ACCOUNT_ABI, 
-  STAKING_ABI, 
+  DELEGATION_ACCOUNT_ABI,
+  ENTRY_POINT_ABI,
   PAYMASTER_ABI,
-  DELEGATOR_ABI
+  DELEGATOR_ABI,
+  STAKING_ABI
 } from '@/constants'
+import { getERC4337Service } from '@/services/erc4337.service'
 
 // ========== DEMO MODE ==========
 // Set to true to bypass parent iframe confirmation for testing
@@ -44,6 +47,10 @@ export default function Home() {
   const [gameResult, setGameResult] = useState<{ success: boolean; message: string; isWin: boolean; total: number } | null>(null)
   const [payRewardAddress, setPayRewardAddress] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
+  
+  // Wrap in Suspense boundary or handle missing params safely? 
+  // For client components, useSearchParams is safe to use but might cause de-opt.
+  const searchParams = useSearchParams()
 
   const addLog = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const newLog: Log = {
@@ -80,9 +87,53 @@ export default function Home() {
     }
   }, [walletAddress, tokenAddress, addLog, tokenSymbol])
 
+  // Check for params from URL (iframe)
+  useEffect(() => {
+    const abstractAccountAddress = searchParams.get('abstractAccountAddress')
+    const tokenAddr = searchParams.get('tokenAddress')
+
+    if (abstractAccountAddress && tokenAddr && !walletAddress) {
+      addLog(`Initializing from URL params...`, 'info')
+      addLog(`Abstract Account: ${abstractAccountAddress.substring(0, 8)}...`, 'info')
+
+      const initWallet = async () => {
+        try {
+          // Store addresses
+          setWalletAddress(abstractAccountAddress)
+          setTokenAddress(tokenAddr)
+          
+          // Fetch real USDT balance from tokenAddress
+          const provider = new ethers.JsonRpcProvider(rpcUrl)
+          const tokenContract = new ethers.Contract(
+            tokenAddr,
+            ['function balanceOf(address) view returns (uint256)'],
+            provider
+          )
+          
+          const balance = await tokenContract.balanceOf(abstractAccountAddress)
+          const formattedBalance = ethers.formatUnits(balance, 18) // USDT is 18 decimals
+          setTokenBalance(formattedBalance)
+          
+          addLog(`USDT Balance: ${formattedBalance}`, 'success')
+          setRolling(false)
+          setGameState('ROLL_DICE')
+        } catch (error) {
+          const err = error as Error
+          addLog(`Error: ${err.message}`, 'error')
+        } finally {
+          setIsWaitingForParent(false)
+          setRolling(false)
+        }
+      }
+      
+      initWallet()
+    }
+  }, [searchParams, walletAddress, addLog])
+
   // Listen for parent messages
   useEffect(() => {
     return eventBridge.listen(async (event) => {
+      // COMMENTED OUT FOR URL PARAM MIGRATION
       if (event.type === GameMessageType.WALLET_CONFIRMED) {
         const value = event.value as any; // Typed in Bridge but we keep handling here for robustness
         const { status, abstractAccountAddress, tokenAddress: tokenAddr, tx, error } = value
@@ -299,32 +350,69 @@ export default function Home() {
           { target: TOKEN_ADDRESS, value: 0, data: tPayFee }
       ]])
 
-      // Step 1: Request backend to build UserOp
-      const buildResult = await defaultBackendService.buildUserOp({
-        senderAddress: walletAddress,
+      const erc4337Service = getERC4337Service()
+      const entryPoint = new ethers.Contract(ENTRY_POINT_ADDRESS, ENTRY_POINT_ABI, provider)
+
+      // Check if account is deployed
+      const code = await provider.getCode(walletAddress)
+      const isDeployed = code !== '0x'
+      console.log(`Account deployed: ${isDeployed}`)
+
+      // Get nonce
+      // If not deployed, nonce should be 0. But getNonce works anyway.
+      const nonce = await entryPoint.getNonce(walletAddress, 0)
+      console.log(`Account nonce: ${nonce.toString()}`)
+
+      // Pack paymaster data
+      // Pack paymaster data
+      // Backend uses 200,000 for verification and post-op gas. 
+      // We align with that to match the backend implementation.
+      const paymasterAndData = erc4337Service.packPaymasterAndData(PAYMASTER_ADDRESS, 200000, 200000)
+
+      // Create signer from session key (tempOwnerPk)
+      // This works because the on-chain Delegator contract authorizes this key!
+      const owner = new ethers.Wallet(tempOwnerPk)
+
+      addLog('Building UserOp locally with session key...', 'info')
+      
+      if (!isDeployed) {
+        throw new Error('Abstract Account not deployed. Cannot execute transfer.')
+      }
+
+      // Build UserOp object (without signature first)
+      const userOp = {
+        sender: walletAddress,
+        nonce: nonce.toString(),
+        initCode: '0x', // Account must be deployed
         callData,
-      })
-
-      const userOpHash = buildResult.userOpHash 
-      console.log(`userOpHash: ${userOpHash}`)
-      if (!userOpHash) {
-        addLog('BE build failed: No UserOp hash returned', 'error')
-        return
+        accountGasLimits: erc4337Service.packUint128Pair(BigInt(4_000_000), BigInt(6_000_000)), // Default verification/call gas
+        preVerificationGas: '100000',
+        paymasterVerificationGasLimit: '200000',
+        paymasterPostOpGasLimit: '200000',
+        gasFees: erc4337Service.packUint128Pair(ethers.parseUnits('1', 'gwei'), ethers.parseUnits('1', 'gwei')),
+        paymasterAndData,
+        signature: '0x'
       }
 
-      addLog(`✓ UserOp built. Hash: ${userOpHash.substring(0, 16)}...`, 'success')
+      addLog('Building UserOp locally w/ manual signing...', 'info')
 
-      // Step 2: Sign UserOp hash with local session wallet (tempOwnerPk)
-      const wallet = new ethers.Wallet(tempOwnerPk)
-      const signature = await wallet.signMessage(ethers.getBytes(userOpHash))
-      addLog('✓ Signature created', 'success')
-
-      // Step 3: Attach signature and submit
+      // Get hash from EntryPoint
+      const userOpHash = await entryPoint.getUserOpHash(userOp)
+      
+      // Sign with EIP-191 prefix using signMessage (CRITICAL FIX: Service uses raw sign, we need signMessage)
+      const signature = await owner.signMessage(ethers.getBytes(userOpHash))
+      
+      // Attach signature
       const signedUserOp = {
-        ...buildResult.userOp,
-        signature,
+        ...userOp,
+        signature
       }
-      console.log(`signedUserOp: ${JSON.stringify(signedUserOp)}`)
+
+      addLog(`✓ UserOp built & signed (EIP-191). Sender: ${signedUserOp.sender.substring(0, 8)}...`, 'success')
+      console.log(`signedUserOp (LOCAL FIXED): ${JSON.stringify(signedUserOp)}`)
+      
+      // --- REMOVED COMPARISON BLOCK (Issue identified: Signing method) ---
+
       addLog('Submitting UserOperation to operator...', 'info')
       const result = await defaultBackendService.submitUserOp({
         userOp: signedUserOp,
@@ -435,6 +523,44 @@ export default function Home() {
     }
   }
 
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <MainContent 
+        walletAddress={walletAddress}
+        handleLogout={handleLogout}
+        loggingOut={loggingOut}
+        gameState={gameState}
+        handlePlayGame={handlePlayGame}
+        rolling={rolling}
+        isWaitingForParent={isWaitingForParent}
+        handleRollDice={handleRollDice}
+        diceValues={diceValues}
+        tokenBalance={tokenBalance}
+        tokenSymbol={tokenSymbol}
+        gameResult={gameResult}
+        handleRefreshBalance={handleRefreshBalance}
+        logs={logs}
+      />
+    </Suspense>
+  )
+}
+
+function MainContent({
+  walletAddress,
+  handleLogout,
+  loggingOut,
+  gameState,
+  handlePlayGame,
+  rolling,
+  isWaitingForParent,
+  handleRollDice,
+  diceValues,
+  tokenBalance,
+  tokenSymbol,
+  gameResult,
+  handleRefreshBalance,
+  logs
+}: any) {
   return (
     <main className="flex min-h-screen items-center justify-center p-4 relative">
       {/* Logout Button */}
