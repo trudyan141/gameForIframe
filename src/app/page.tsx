@@ -29,7 +29,7 @@ import { getERC4337Service } from '@/services/erc4337.service'
 const DEMO_MODE = false
 // ================================
 
-export default function Home() {
+function GameContent() {
   // Game State
   const [gameState, setGameState] = useState<'LOADING' | 'PLAY' | 'ROLL_DICE'>('LOADING')
   const [walletAddress, setWalletAddress] = useState('')
@@ -619,5 +619,18 @@ function MainContent({
         </div>
       </div>
     </main>
+  )
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950">
+        <div className="w-10 h-10 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4" />
+        <p className="text-slate-500 text-sm">Initializing game...</p>
+      </div>
+    }>
+      <GameContent />
+    </Suspense>
   )
 }
