@@ -4,5 +4,5 @@ export const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://s
 // API endpoints
 export const API_ENDPOINTS = {
   // UserOp operations
-  submit: `${BACKEND_API_URL}/api/userops/submit`,
+  submit: `${BACKEND_API_URL}/api/v1/userops/submit`,
 } as const;
