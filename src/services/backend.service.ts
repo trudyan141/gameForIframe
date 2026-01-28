@@ -13,7 +13,7 @@ export class BackendService {
     userOp: any;
     entryPointAddress: string;
   }) {
-    const response = await fetch(API_ENDPOINTS.stake, {
+    const response = await fetch(API_ENDPOINTS.submit, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),

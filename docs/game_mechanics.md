@@ -74,7 +74,7 @@ The `BackendService` (`src/services/backend.service.ts`) simply acts as a proxy 
 ```typescript
 // src/services/backend.service.ts
 async submitUserOp(params: { userOp: any; entryPointAddress: string }) {
-  const response = await fetch(API_ENDPOINTS.stake, {
+  const response = await fetch(API_ENDPOINTS.submit, {
     method: 'POST',
     body: JSON.stringify(params),
     // ...
