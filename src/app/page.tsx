@@ -444,9 +444,6 @@ function GameContent() {
 
     try {
       const provider = new ethers.JsonRpcProvider(rpcUrl)
-      const delegatorIface = new ethers.Interface(DELEGATOR_ABI)
-      const tokenIface = new ethers.Interface(TOKEN_ABI)
-      const delegationAccountIface = new ethers.Interface(DELEGATION_ACCOUNT_ABI)
       const paymasterContract = new ethers.Contract(PAYMASTER_ADDRESS, PAYMASTER_ABI, provider)
 
       // Get paymaster fee
@@ -455,48 +452,41 @@ function GameContent() {
       const sessionWallet = new ethers.Wallet(tempOwnerPk)
       const sessionAddress = sessionWallet.address
 
-      // Encode calls
-      const removeDelegatorData = delegatorIface.encodeFunctionData('removeDelegatorOnBehalfOf', [
+      // Build UserOp locally
+      const erc4337Service = getERC4337Service()
+      const entryPoint = new ethers.Contract(ENTRY_POINT_ADDRESS, ENTRY_POINT_ABI, provider)
+
+      // Get nonce (assume account deployed if logging out)
+      const nonce = await entryPoint.getNonce(walletAddress, 0)
+      
+      addLog('Building Revoke UserOp locally...', 'info')
+      
+      const userOp = await erc4337Service.createRevokeSessionUserOp({
+        sender: walletAddress,
+        nonce: nonce.toString(),
         sessionAddress,
-      ])
-      const payFeeData = tokenIface.encodeFunctionData('transfer', [
-        PAYMASTER_ADDRESS,
+        paymasterAddress: PAYMASTER_ADDRESS,
         requiredFee,
-      ])
-
-      // Build executeBatch calldata
-      const callData = delegationAccountIface.encodeFunctionData('executeBatch', [
-        [
-          { target: DELEGATOR_ADDRESS, value: 0, data: removeDelegatorData },
-          { target: TOKEN_ADDRESS, value: 0, data: payFeeData },
-        ],
-      ])
-
-      // Step 1: Request backend to build UserOp
-      const buildResult = await defaultBackendService.buildUserOp({
-        senderAddress: walletAddress,
-        callData,
+        delegatorAddress: DELEGATOR_ADDRESS,
+        tokenAddress: TOKEN_ADDRESS
       })
 
-      const userOpHash = buildResult.userOpHash
-      if (!userOpHash) {
-        throw new Error('Failed to build logout UserOp')
-      }
+      // Calculate hash
+      const userOpHash = await entryPoint.getUserOpHash(userOp)
+      addLog('✓ UserOp built & hashing...', 'success')
 
-      addLog('✓ Logout UserOp built', 'success')
-
-      // Step 2: Session wallet signs the revocation UserOp hash
+      // Sign with session key (EIP-191)
       const signature = await sessionWallet.signMessage(ethers.getBytes(userOpHash))
       addLog('✓ Signature created', 'success')
 
-      // Step 3: Attach signature to UserOp and submit
+      // Attach signature
       const signedUserOp = {
-        ...buildResult.userOp,
+        ...userOp,
         signature,
       }
 
       addLog('Submitting revocation to operator...', 'info')
-      const result = await defaultBackendService.revokeDelegator({
+      const result = await defaultBackendService.submitUserOp({
         userOp: signedUserOp,
         entryPointAddress: ENTRY_POINT_ADDRESS,
       })

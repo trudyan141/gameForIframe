@@ -14,6 +14,7 @@ export class BackendService {
     accountAddress: string;
     delegatorAddress: string;
   }) {
+    
     const response = await fetch(API_ENDPOINTS.addDelegator, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

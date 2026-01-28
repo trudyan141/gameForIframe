@@ -7,6 +7,8 @@ import {
   SIMPLE_ACCOUNT_ABI, 
   TOKEN_ABI, 
   PAYMASTER_ABI,
+  DELEGATOR_ABI,
+  DELEGATION_ACCOUNT_ABI,
   ENTRY_POINT_ADDRESS,
   FACTORY_ADDRESS,
   TOKEN_ADDRESS,
@@ -333,6 +335,162 @@ export class ERC4337Service {
     const valGasHex = BigInt(validationGasLimit).toString(16).padStart(32, '0')
     const postGasHex = BigInt(postOpGasLimit).toString(16).padStart(32, '0')
     return '0x' + addrNo0x + valGasHex + postGasHex + extraData.replace(/^0x/, '')
+  }
+
+  // ============================================
+  // USER OP BUILDERS (Generic & Specific)
+  // ============================================
+
+  /**
+   * Generic builder for batch operations.
+   * Automatically appends the Paymaster fee payment call.
+   */
+  async createBatchUserOp(params: {
+    sender: string,
+    nonce: string,
+    calls: { target: string; value: bigint; data: string }[],
+    paymasterAddress: string,
+    requiredFee: bigint,
+    tokenAddress: string,
+    isDeployed?: boolean
+  }): Promise<UserOperation> {
+    const {
+      sender,
+      nonce,
+      calls,
+      paymasterAddress,
+      requiredFee,
+      tokenAddress,
+      isDeployed = true
+    } = params
+
+    const tokenIface = new ethers.Interface(TOKEN_ABI)
+    const delegationAccountIface = new ethers.Interface(DELEGATION_ACCOUNT_ABI)
+
+    // Append Paymaster Fee call
+    const payFeeData = tokenIface.encodeFunctionData('transfer', [
+      paymasterAddress,
+      requiredFee,
+    ])
+    
+    // Final list of calls
+    const finalCalls = [
+      ...calls,
+      { target: tokenAddress, value: BigInt(0), data: payFeeData }
+    ]
+
+    // Build executeBatch calldata
+    const callData = delegationAccountIface.encodeFunctionData('executeBatch', [
+      finalCalls.map(c => ({
+        target: c.target,
+        value: c.value,
+        data: c.data
+      }))
+    ])
+
+    // Pack paymaster data
+    const paymasterAndData = this.packPaymasterAndData(paymasterAddress, 200000, 200000)
+
+    // Build UserOp
+    return {
+      sender,
+      nonce,
+      initCode: isDeployed ? '0x' : '0x',
+      callData,
+      accountGasLimits: this.packUint128Pair(BigInt(4_000_000), BigInt(6_000_000)),
+      preVerificationGas: '100000',
+      paymasterVerificationGasLimit: '200000',
+      paymasterPostOpGasLimit: '200000',
+      gasFees: this.packUint128Pair(ethers.parseUnits('1', 'gwei'), ethers.parseUnits('1', 'gwei')),
+      paymasterAndData,
+      signature: '0x'
+    }
+  }
+
+  /**
+   * Specific builder: Revoke Session
+   */
+  async createRevokeSessionUserOp(params: {
+    sender: string,
+    nonce: string,
+    sessionAddress: string,
+    paymasterAddress: string,
+    requiredFee: bigint,
+    delegatorAddress: string,
+    tokenAddress: string,
+    isDeployed?: boolean
+  }): Promise<UserOperation> {
+    const { sessionAddress, delegatorAddress } = params
+    const delegatorIface = new ethers.Interface(DELEGATOR_ABI)
+
+    const removeDelegatorData = delegatorIface.encodeFunctionData('removeDelegatorOnBehalfOf', [
+      sessionAddress,
+    ])
+
+    return this.createBatchUserOp({
+      ...params,
+      calls: [{ target: delegatorAddress, value: BigInt(0), data: removeDelegatorData }]
+    })
+  }
+
+  /**
+   * Specific builder: Transfer Token
+   */
+  async createTransferUserOp(params: {
+    sender: string,
+    nonce: string,
+    recipient: string,
+    amount: bigint,
+    paymasterAddress: string,
+    requiredFee: bigint,
+    tokenAddress: string,
+    isDeployed?: boolean
+  }): Promise<UserOperation> {
+    const { recipient, amount, tokenAddress } = params
+    const tokenIface = new ethers.Interface(TOKEN_ABI)
+
+    const transferData = tokenIface.encodeFunctionData('transfer', [
+      recipient,
+      amount
+    ])
+
+    return this.createBatchUserOp({
+      ...params,
+      calls: [{ target: tokenAddress, value: BigInt(0), data: transferData }]
+    })
+  }
+
+  /**
+   * Specific builder: Add Delegator (Login)
+   */
+  async createAddDelegatorUserOp(params: {
+    sender: string,
+    nonce: string,
+    sessionAddress: string,
+    expiryDuration: number,
+    paymasterAddress: string,
+    requiredFee: bigint,
+    delegatorAddress: string,
+    tokenAddress: string,
+    isDeployed?: boolean
+  }): Promise<UserOperation> {
+    const { sessionAddress, expiryDuration, delegatorAddress } = params
+    const delegatorIface = new ethers.Interface(DELEGATOR_ABI)
+
+    // Calculate absolute timestamp (current + duration)
+    // Note: This assumes the client time is synced enough. 
+    // Ideally this comes from a time server or block time, but roughly ok for client.
+    const validUntil = Math.floor(Date.now() / 1000) + expiryDuration
+    
+    const addDelegatorData = delegatorIface.encodeFunctionData('addDelegatorWithExpiry', [
+      sessionAddress,
+      validUntil
+    ])
+
+    return this.createBatchUserOp({
+      ...params,
+      calls: [{ target: delegatorAddress, value: BigInt(0), data: addDelegatorData }]
+    })
   }
 }
 
