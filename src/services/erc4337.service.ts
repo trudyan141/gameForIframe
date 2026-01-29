@@ -139,74 +139,7 @@ export class ERC4337Service {
     return await factory.getFunction('getAddress')(ownerAddress, salt)
   }
 
-  // ============================================
-  // TRANSFER
-  // ============================================
-
-  /**
-   * Transfer token từ Abstract Account
-   */
-  async transferToken(
-    ownerPrivateKey: string,
-    senderAccount: string,
-    recipientAddress: string,
-    amount: string,
-    usePaymaster: boolean = true
-  ): Promise<{ txHash: string; blockNumber: number }> {
-    const ownerWallet = new ethers.Wallet(ownerPrivateKey)
-    const entryPoint = new ethers.Contract(
-      this.config.entryPointAddress,
-      ENTRY_POINT_ABI,
-      this.provider
-    )
-
-    const tokenIface = new ethers.Interface(TOKEN_ABI)
-    const simpleAccountIface = new ethers.Interface(SIMPLE_ACCOUNT_ABI)
-    const transferAmount = ethers.parseUnits(amount, 18)
-
-    let callData: string
-    let paymasterAndData = '0x'
-
-    if (usePaymaster) {
-      const paymasterContract = new ethers.Contract(
-        this.config.paymasterAddress,
-        PAYMASTER_ABI,
-        this.provider
-      )
-      const requiredFee = await paymasterContract.requiredFee()
-
-      const tTransfer = tokenIface.encodeFunctionData('transfer', [recipientAddress, transferAmount])
-      const tPayFee = tokenIface.encodeFunctionData('transfer', [this.config.paymasterAddress, requiredFee])
-
-      callData = simpleAccountIface.encodeFunctionData('executeBatch', [[
-        { target: this.config.tokenAddress, value: 0, data: tTransfer },
-        { target: this.config.tokenAddress, value: 0, data: tPayFee }
-      ]])
-
-      paymasterAndData = this.packPaymasterAndData(this.config.paymasterAddress, 200000, 200000)
-    } else {
-      const tTransfer = tokenIface.encodeFunctionData('transfer', [recipientAddress, transferAmount])
-      callData = simpleAccountIface.encodeFunctionData('execute', [
-        this.config.tokenAddress,
-        0,
-        tTransfer
-      ])
-    }
-
-    const nonce = await entryPoint.getNonce(senderAccount, 0)
-
-    const userOp = await this.buildAndSignUserOp({
-      entry: entryPoint,
-      sender: senderAccount,
-      nonce,
-      initCode: '0x',
-      callData,
-      owner: ownerWallet,
-      paymasterAndData
-    })
-
-    return await this.submitUserOp(userOp)
-  }
+  
 
   // ============================================
   // BALANCE QUERIES
@@ -292,30 +225,6 @@ export class ERC4337Service {
     userOp.signature = ethers.Signature.from(ownerSig).serialized
 
     return userOp
-  }
-
-  async submitUserOp(userOp: UserOperation): Promise<{
-    txHash: string
-    blockNumber: number
-  }> {
-    const response = await fetch('/api/transfer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userOp,
-        entryPointAddress: this.config.entryPointAddress
-      })
-    })
-
-    const result = await response.json()
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to submit UserOp')
-    }
-
-    return {
-      txHash: result.txHash,
-      blockNumber: result.blockNumber
-    }
   }
 
   packUint128Pair(high: bigint, low: bigint): string {
